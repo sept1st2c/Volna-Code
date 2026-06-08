@@ -1,0 +1,9 @@
+[project]
+name = "agent"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "livekit-agents[deepgram,groq,silero]>=1.5.17",
+    "python-dotenv>=1.2.2",
+]
