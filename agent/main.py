@@ -8,9 +8,15 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
+from livekit.agents.voice import ConversationItemAddedEvent
 from livekit.plugins import deepgram, groq, silero
 
 from tutor import GREETING, TUTOR_INSTRUCTIONS
+
+# A dedicated logger for the conversation transcript.
+# Using a named logger ("tutor.conversation") instead of the root logger lets us
+# distinguish these messages from LiveKit's internal DEBUG/INFO noise in the terminal.
+conversation_log = logging.getLogger("tutor.conversation")
 
 # load_dotenv() reads agent/.env and loads every key into environment variables.
 # The Groq/Deepgram/LiveKit plugins look for their keys in os.environ automatically.
@@ -89,6 +95,27 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=groq.LLM(model="llama-3.3-70b-versatile"),
         tts=deepgram.TTS(),
     )
+
+    # conversation_item_added fires every time a message is finalized and added
+    # to the conversation history — both user turns (after STT) and agent turns
+    # (after the LLM finishes generating). We use it to print both sides of the
+    # conversation so you can see the full exchange in the terminal.
+    #
+    # @session.on("event_name") is a decorator that registers an event listener.
+    # It's the same pattern as addEventListener in JavaScript.
+    # The function runs synchronously each time the event fires.
+    @session.on("conversation_item_added")
+    def on_conversation_item_added(event: ConversationItemAddedEvent) -> None:
+        # event.item is a ChatMessage with .role ("user" or "assistant") and
+        # .text_content (the full text of the message as a string).
+        # We skip system messages — those are the instructions, not conversation.
+        item = event.item
+        if not hasattr(item, "role") or not hasattr(item, "text_content"):
+            return
+        if item.role == "user":
+            conversation_log.info("STUDENT : %s", item.text_content)
+        elif item.role == "assistant":
+            conversation_log.info("TUTOR   : %s", item.text_content)
 
     # session.start() kicks off the full pipeline.
     # TutorAgent() — a fresh instance per session means each student gets
