@@ -7,6 +7,7 @@
 import logging
 from dotenv import load_dotenv
 
+from livekit import rtc
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
 from livekit.agents.voice import ConversationItemAddedEvent
 from livekit.plugins import deepgram, groq, silero
@@ -95,6 +96,45 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=groq.LLM(model="llama-3.3-70b-versatile"),
         tts=deepgram.TTS(),
     )
+
+    # data_received fires when the browser sends a raw data packet to the room.
+    # We use this for the "Analyze my code" button — the frontend publishes the
+    # code as bytes with topic="code_snapshot". The agent picks it up here,
+    # logs it, and calls generate_reply() to trigger a voice review response.
+    #
+    # Why a data channel instead of a chat message?
+    #   Data channels are low-level, reliable, and topic-labelled — perfect for
+    #   structured payloads like code. Chat messages are plain text and go through
+    #   a different pipeline that might interfere with the voice turn detection.
+    #
+    # ctx.room — the LiveKit Room object. .on() registers an event listener.
+    # rtc.DataPacket — the received packet with:
+    #   .data    → the raw bytes (we decode to get the code string)
+    #   .topic   → the label we set in the browser ("code_snapshot")
+    @ctx.room.on("data_received")
+    def on_data_received(data_packet: rtc.DataPacket) -> None:
+        # Ignore any data packets not tagged as code snapshots.
+        # This future-proofs the handler — we can add other topics later.
+        if data_packet.topic != "code_snapshot":
+            return
+
+        code = data_packet.data.decode("utf-8")
+        conversation_log.info("CODE SNAPSHOT received:\n%s", code)
+
+        # generate_reply() is synchronous (not async) — it schedules the reply
+        # and returns immediately. LiveKit handles the actual LLM call + TTS async.
+        #
+        # user_input — injected as a user turn so the LLM sees it in history.
+        # instructions — extra guidance ONLY for this one reply, doesn't change
+        #               the system prompt. We use it to steer the tutor toward
+        #               a code review response rather than a general reply.
+        session.generate_reply(
+            user_input=f"Here is my current code:\n```python\n{code}\n```",
+            instructions=(
+                "Review the student's code. Identify what is correct, what is missing or wrong, "
+                "and ask one guiding question to move them forward. Do not give the full solution."
+            ),
+        )
 
     # conversation_item_added fires every time a message is finalized and added
     # to the conversation history — both user turns (after STT) and agent turns

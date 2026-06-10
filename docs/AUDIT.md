@@ -142,6 +142,76 @@ DsaTut/
 
 ---
 
+---
+
+## Phase 2 Files
+
+---
+
+### `frontend/components/CodeEditor.tsx`
+**What it is:** The Monaco code editor component — the text area where the student writes Python.
+
+**Why we need it:** Students need to write actual code, not just talk about it. Monaco is the same editor that powers VS Code. The `@monaco-editor/react` package wraps it as a React component in about 10 lines.
+
+**How it affects the system:** Adds the code-writing surface to the UI. Also contains the "Run" button which calls `/api/execute`.
+
+**What you learn from it:** Controlled components in React (the editor's value is owned by the parent via props), `async/await` for fetch calls, TypeScript interfaces.
+
+**Key concept — Controlled component:** Monaco's `value={code}` means the editor *displays* whatever `code` contains. The parent (`page.tsx`) owns the state. When the user types, `onChange` fires and calls `onCodeChange(newValue)` which updates the parent's state, which flows back down to the editor. This "one source of truth" pattern is fundamental React.
+
+---
+
+### `frontend/app/api/execute/route.ts`
+**What it is:** A Next.js API route that proxies code to the Piston API for sandboxed execution.
+
+**Why we need it:** We can't run arbitrary user code on our own server — infinite loops, `import os`, etc. are dangerous. Piston runs code in isolated Docker containers. It's free, open source, and requires no API key.
+
+**How it affects the system:** The "Run" button in `CodeEditor` calls this route. The route forwards the code to `emkc.org/api/v2/piston/execute` and returns stdout/stderr/exit code back to the browser.
+
+**What you learn from it:** Why you proxy through your own backend instead of calling third-party APIs directly from the browser. How to forward a request (`fetch` inside an API route).
+
+**Key concept — Sandboxed execution:** Piston runs each code snippet in a fresh Docker container with strict resource limits (CPU time, memory, no network access). Even if the student writes `while True: pass`, it times out safely. This is why we use it instead of building our own execution environment.
+
+---
+
+### `frontend/components/VoiceSession.tsx` (updated)
+**What changed:** Added `code` prop, `AnalyzeButton` component, `useRoomContext()` import.
+
+**Why:** The "Analyze my code" button needs to send the code to the agent. The only way to do this from the browser is via LiveKit's data channel, which requires access to the `room` object. `useRoomContext()` gets that — but it only works inside `<LiveKitRoom>`, which is why `AnalyzeButton` lives here and not in `CodeEditor`.
+
+**Key concept — LiveKit data channel:** WebRTC supports sending arbitrary binary data between participants alongside audio/video. `room.localParticipant.publishData(bytes, { topic: "code_snapshot" })` sends a data packet. The Python agent receives it via `ctx.room.on("data_received")`. This is how non-audio information flows from browser to agent.
+
+**Key concept — `useRoomContext()`:** A React hook from `@livekit/components-react` that returns the underlying `Room` object managed by `<LiveKitRoom>`. It must be called inside the `<LiveKitRoom>` tree — calling it outside throws an error because the context doesn't exist there.
+
+---
+
+### `frontend/app/page.tsx` (updated)
+**What changed:** Added `"use client"`, `useState` for `code`, two-column grid layout, imports for both `VoiceSession` and `CodeEditor`.
+
+**Why:** The `code` state needs to be shared between `VoiceSession` (sends it to agent) and `CodeEditor` (displays and edits it). React's rule is: shared state lives in the closest common parent. Here, `page.tsx` is that parent.
+
+**Key concept — Lifting state up:** When two sibling components need the same piece of data, you "lift" the state to their common parent and pass it down as props. This is a core React pattern. `page.tsx` owns `code`, passes it to both children.
+
+---
+
+### `agent/main.py` (updated)
+**What changed:** Added `from livekit import rtc` import and `on_data_received` event handler.
+
+**Why:** The agent now needs to receive data channel messages from the browser. `rtc` is LiveKit's real-time communications module — it provides the `DataPacket` type and the `Room` event system.
+
+**Key concept — Event-driven architecture:** Instead of polling "has new code arrived?", we register a listener that fires automatically when data arrives. This is more efficient and is the standard pattern in async systems. `@ctx.room.on("data_received")` is exactly like `addEventListener` in JavaScript.
+
+---
+
+## Packages Installed (Phase 2)
+
+### JavaScript (frontend/)
+| Package | What it does |
+|---|---|
+| `@monaco-editor/react` | Wraps the VS Code Monaco editor as a React component |
+
+---
+
 ## Decisions Log
 
 | Decision | Why |
